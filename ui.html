@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            padding: 20px;
+            color: #333;
+        }
+
+        h2 {
+            margin-bottom: 20px;
+        }
+
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input,
+        select,
+        button {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        button {
+            background-color: #18A0FB;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0D8DE3;
+        }
+
+        .collection {
+            margin-bottom: 20px;
+            border: 1px solid #eee;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .variable {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+        }
+
+        .variable-name {
+            font-weight: bold;
+        }
+
+        .variable-type {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .variable-values {
+            margin-top: 5px;
+            font-size: 0.9em;
+        }
+
+        .editable-value,
+        .variable-name {
+            border: 1px solid transparent;
+            padding: 2px;
+            border-radius: 3px;
+        }
+
+        .editable-value:hover,
+        .variable-name:hover {
+            border-color: #ccc;
+        }
+
+        .editable-value:focus,
+        .variable-name:focus {
+            border-color: #18A0FB;
+            outline: none;
+        }
+
+        #search-bar {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        #mode-select {
+            margin-left: 10px;
+        }
+
+        .mode-value.hidden {
+            display: none;
+        }
+
+        #mode-management {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        #mode-management h3 {
+            margin-top: 0;
+        }
+
+        #mode-list {
+            margin-bottom: 10px;
+        }
+
+        .mode-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .add-variable-btn {
+            margin-bottom: 10px;
+        }
+
+        #create-variable-form {
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        #context-menu {
+            position: fixed;
+            background-color: white;
+            border: 1px solid #ccc;
+            padding: 5px;
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+        }
+
+        #context-menu button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: #18A0FB;
+            border: none;
+            padding: 5px;
+            cursor: pointer;
+        }
+
+        #context-menu button:hover {
+            background-color: #0D8DE3;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Variable Manager</h2>
+    <select id="variable-filter">
+        <option value="ALL">All Types</option>
+        <option value="COLOR">Color</option>
+        <option value="FLOAT">Float</option>
+        <option value="INTEGER">Integer</option>
+        <option value="STRING">String</option>
+        <option value="BOOLEAN">Boolean</option>
+    </select>
+    <select id="mode-select">
+        <option value="all">All Modes</option>
+    </select>
+    <input type="text" id="search-bar" placeholder="Search variables...">
+    <div id="variables-list"></div>
+    <div id="mode-management">
+        <h3>Mode Management</h3>
+        <select id="collection-select-for-modes">
+            <option value="">Select a collection</option>
+        </select>
+        <div id="mode-list"></div>
+        <input type="text" id="new-mode-name" placeholder="New mode name">
+        <button id="create-mode-btn">Create Mode</button>
+    </div>
+
+    <script>
+        let allVariables = [];
+        let allCollections = [];
+        let currentFilter = 'ALL';
+        let currentMode = 'all';
+        let searchTerm = '';
+        let clipboard = null;
+
+        window.onmessage = async (event) => {
+            const message = event.data.pluginMessage;
+            console.log('Received message from plugin:', message);
+            if (message.type === 'variables') {
+                allVariables = message.variables;
+                allCollections = message.collections;
+                updateModeSelect();
+                updateModeManagement();
+                displayVariables(allVariables);
+            } else if (message.type === 'error') {
+                displayError(message.message);
+            } else if (message.type === 'refresh-variables') {
+                parent.postMessage({ pluginMessage: { type: 'get-variables' } }, '*');
+            }
+        };
+
+        function updateModeSelect() {
+            const modeSelect = document.getElementById('mode-select');
+            modeSelect.innerHTML = '<option value="all">All Modes</option>';
+
+            const allModes = new Set();
+            allCollections.forEach(collection => {
+                collection.modes.forEach(mode => {
+                    if (!allModes.has(mode.id)) {
+                        allModes.add(mode.id);
+                        const option = document.createElement('option');
+                        option.value = mode.id;
+                        option.textContent = mode.name;
+                        modeSelect.appendChild(option);
+                    }
+                });
+            });
+        }
+
+        function displayVariables(variables) {
+            const list = document.getElementById('variables-list');
+            if (!Array.isArray(variables) || variables.length === 0) {
+                list.innerHTML = '<p>No variables found.</p>';
+                return;
+            }
+
+            const filteredVariables = variables.filter(v =>
+                (currentFilter === 'ALL' || v.resolvedType === currentFilter) &&
+                variableMatchesSearch(v)
+            );
+
+            if (filteredVariables.length === 0) {
+                list.innerHTML = '<p>No matching variables found.</p>';
+                return;
+            }
+
+            const variablesByCollection = {};
+            filteredVariables.forEach(v => {
+                if (!variablesByCollection[v.collectionName]) {
+                    variablesByCollection[v.collectionName] = [];
+                }
+                variablesByCollection[v.collectionName].push(v);
+            });
+
+            list.innerHTML = Object.entries(variablesByCollection).map(([collectionName, vars]) => `
+                <div class="collection" data-collection-id="${vars[0].collectionId}">
+                    <h3>${collectionName}</h3>
+                    <button class="add-variable-btn" data-collection-id="${vars[0].collectionId}">Ajouter une variable</button>
+                    <div class="variables-container">
+                        ${vars.map(v => `
+                            <div class="variable" data-id="${v.id}" data-variable-id="${v.id}">
+                                <input class="variable-name" value="${v.name}" data-original="${v.name}">
+                                <div class="variable-type">${v.resolvedType}</div>
+                                <div class="variable-values">
+                                    ${v.values.map(value => `
+                                        <div class="mode-value ${currentMode !== 'all' && value.modeId !== currentMode ? 'hidden' : ''}">
+                                            ${value.modeName}: ${createEditableValue(v.id, v.resolvedType, value.value, value.modeId)}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+
+            addEditableListeners();
+            addCreateVariableListeners();
+        }
+
+        function createEditableValue(id, type, value, modeId) {
+            switch (type) {
+                case 'COLOR':
+                    return `<input type="color" class="editable-value" data-type="COLOR" value="${rgbToHex(value)}" data-mode-id="${modeId}">`;
+                case 'FLOAT':
+                case 'INTEGER':
+                    return `<input type="number" class="editable-value" data-type="${type}" value="${value}" step="${type === 'INTEGER' ? '1' : 'any'}" data-mode-id="${modeId}">`;
+                case 'STRING':
+                    return `<input type="text" class="editable-value" data-type="STRING" value="${value}" data-mode-id="${modeId}">`;
+                case 'BOOLEAN':
+                    return `
+                        <select class="editable-value" data-type="BOOLEAN" data-mode-id="${modeId}">
+                            <option value="true" ${value ? 'selected' : ''}>True</option>
+                            <option value="false" ${!value ? 'selected' : ''}>False</option>
+                        </select>
+                    `;
+                default:
+                    return JSON.stringify(value);
+            }
+        }
+
+        function addEditableListeners() {
+            document.querySelectorAll('.editable-value, .variable-name').forEach(element => {
+                element.addEventListener('change', handleVariableChange);
+                element.addEventListener('blur', handleVariableChange);
+            });
+
+            document.querySelectorAll('.variable').forEach(element => {
+                element.addEventListener('contextmenu', function (e) {
+                    e.preventDefault();
+                    const variableId = this.dataset.variableId;
+                    createContextMenu(e.clientX, e.clientY, variableId);
+                });
+            });
+        }
+
+        function createContextMenu(x, y, variableId) {
+            console.log('Creating context menu for variable:', variableId);
+            const menu = document.createElement('div');
+            menu.id = 'context-menu';
+            menu.style.position = 'fixed';
+            menu.style.left = `${x}px`;
+            menu.style.top = `${y}px`;
+            menu.style.backgroundColor = 'white';
+            menu.style.border = '1px solid black';
+            menu.style.padding = '5px';
+            menu.style.zIndex = '1000';
+
+            const actions = [
+                { name: 'Duplicate', action: () => duplicateVariable(variableId) },
+                { name: 'Delete', action: () => deleteVariable(variableId) },
+                { name: 'Copy', action: () => copyVariable(variableId) },
+                { name: 'Cut', action: () => cutVariable(variableId) },
+            ];
+
+            actions.forEach(item => {
+                const button = document.createElement('button');
+                button.textContent = item.name;
+                button.addEventListener('click', () => {
+                    item.action();
+                    menu.remove();
+                });
+                menu.appendChild(button);
+            });
+
+            if (clipboard) {
+                console.log('Clipboard content available, adding Paste option');
+                const pasteButton = document.createElement('button');
+                pasteButton.textContent = 'Paste';
+                pasteButton.addEventListener('click', () => {
+                    console.log('Paste button clicked');
+                    menu.innerHTML = ''; // Clear existing menu content
+
+                    const collectionSelect = document.createElement('select');
+                    allCollections.forEach(collection => {
+                        const option = document.createElement('option');
+                        option.value = collection.id;
+                        option.textContent = collection.name;
+                        collectionSelect.appendChild(option);
+                    });
+                    menu.appendChild(collectionSelect);
+
+                    const confirmButton = document.createElement('button');
+                    confirmButton.textContent = 'Confirm Paste';
+                    confirmButton.addEventListener('click', () => {
+                        const selectedCollectionId = collectionSelect.value;
+                        console.log('Confirm Paste clicked, collection:', selectedCollectionId);
+                        pasteVariable(selectedCollectionId);
+                        menu.remove();
+                    });
+                    menu.appendChild(confirmButton);
+
+                    // Add a cancel button
+                    const cancelButton = document.createElement('button');
+                    cancelButton.textContent = 'Cancel';
+                    cancelButton.addEventListener('click', () => {
+                        menu.remove();
+                    });
+                    menu.appendChild(cancelButton);
+                });
+                menu.appendChild(pasteButton);
+            } else {
+                console.log('No clipboard content available');
+            }
+
+            document.body.appendChild(menu);
+
+            document.addEventListener('click', function closeMenu(e) {
+                if (!menu.contains(e.target)) {
+                    menu.remove();
+                    document.removeEventListener('click', closeMenu);
+                }
+            });
+        }
+
+        function handleVariableChange(event) {
+            const variableElement = event.target.closest('.variable');
+            const variableId = variableElement.dataset.id;
+            const variable = allVariables.find(v => v.id === variableId);
+
+            if (!variable) {
+                console.error('Variable not found');
+                return;
+            }
+
+            let newValue;
+            let name = variableElement.querySelector('.variable-name').value;
+            const modeId = event.target.dataset.modeId;
+
+            if (event.target.classList.contains('variable-name')) {
+                if (name === event.target.dataset.original) {
+                    return; // Le nom n'a pas changé
+                }
+            } else {
+                const type = event.target.dataset.type;
+                switch (type) {
+                    case 'COLOR':
+                        newValue = hexToRgb(event.target.value);
+                        break;
+                    case 'FLOAT':
+                        newValue = parseFloat(event.target.value);
+                        break;
+                    case 'INTEGER':
+                        newValue = parseInt(event.target.value, 10);
+                        break;
+                    case 'STRING':
+                        newValue = event.target.value;
+                        break;
+                    case 'BOOLEAN':
+                        newValue = event.target.value === 'true';
+                        break;
+                }
+            }
+
+            updateVariable(variableId, name, newValue, modeId);
+        }
+
+        function updateVariable(variableId, name, value, modeId) {
+            parent.postMessage({
+                pluginMessage: {
+                    type: 'update-variable',
+                    variableId,
+                    name,
+                    value,
+                    modeId
+                }
+            }, '*');
+        }
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16) / 255,
+                g: parseInt(result[2], 16) / 255,
+                b: parseInt(result[3], 16) / 255,
+                a: 1
+            } : null;
+        }
+
+        function rgbToHex(rgb) {
+            return "#" + ((1 << 24) + (Math.round(rgb.r * 255) << 16) + (Math.round(rgb.g * 255) << 8) + Math.round(rgb.b * 255)).toString(16).slice(1);
+        }
+
+        function displayError(message) {
+            const list = document.getElementById('variables-list');
+            list.innerHTML = `<p style="color: red;">Error: ${message}</p>`;
+        }
+
+        function variableMatchesSearch(variable) {
+            return variable.name.toLowerCase().includes(searchTerm) ||
+                variable.resolvedType.toLowerCase().includes(searchTerm) ||
+                variable.collectionName.toLowerCase().includes(searchTerm);
+        }
+
+        function updateModeManagement() {
+            const collectionSelect = document.getElementById('collection-select-for-modes');
+            const modeList = document.getElementById('mode-list');
+
+            collectionSelect.innerHTML = '<option value="">Select a collection</option>';
+            allCollections.forEach(collection => {
+                const option = document.createElement('option');
+                option.value = collection.id;
+                option.textContent = collection.name;
+                collectionSelect.appendChild(option);
+            });
+
+            collectionSelect.addEventListener('change', function () {
+                const selectedCollection = allCollections.find(c => c.id === this.value);
+                if (selectedCollection) {
+                    displayModes(selectedCollection);
+                } else {
+                    modeList.innerHTML = '';
+                }
+            });
+
+            document.getElementById('create-mode-btn').addEventListener('click', function () {
+                const collectionId = collectionSelect.value;
+                const modeName = document.getElementById('new-mode-name').value;
+                if (collectionId && modeName) {
+                    parent.postMessage({
+                        pluginMessage: {
+                            type: 'create-mode',
+                            collectionId: collectionId,
+                            modeName: modeName
+                        }
+                    }, '*');
+                }
+            });
+        }
+
+        function displayModes(collection) {
+            const modeList = document.getElementById('mode-list');
+            modeList.innerHTML = '';
+            collection.modes.forEach(mode => {
+                const modeItem = document.createElement('div');
+                modeItem.className = 'mode-item';
+                modeItem.innerHTML = `
+                    <span>${mode.name}</span>
+                    <div>
+                        <button class="rename-mode" data-mode-id="${mode.modeId}">Rename</button>
+                        <button class="delete-mode" data-mode-id="${mode.modeId}">Delete</button>
+                    </div>
+                `;
+                modeList.appendChild(modeItem);
+            });
+
+            modeList.addEventListener('click', function (e) {
+                if (e.target.classList.contains('rename-mode')) {
+                    const modeId = e.target.dataset.modeId;
+                    const newName = prompt('Enter new name for the mode:');
+                    if (newName) {
+                        parent.postMessage({
+                            pluginMessage: {
+                                type: 'rename-mode',
+                                collectionId: collection.id,
+                                modeId: modeId,
+                                newName: newName
+                            }
+                        }, '*');
+                    }
+                } else if (e.target.classList.contains('delete-mode')) {
+                    const modeId = e.target.dataset.modeId;
+                    if (confirm('Are you sure you want to delete this mode?')) {
+                        parent.postMessage({
+                            pluginMessage: {
+                                type: 'delete-mode',
+                                collectionId: collection.id,
+                                modeId: modeId
+                            }
+                        }, '*');
+                    }
+                }
+            });
+        }
+
+        function showCreateVariableForm(collectionId) {
+            const existingForm = document.getElementById('create-variable-form');
+            if (existingForm) {
+                existingForm.remove();
+            }
+
+            const form = document.createElement('form');
+            form.id = 'create-variable-form';
+            form.innerHTML = `
+                <input type="text" id="variable-name" placeholder="Variable Name" required>
+                <select id="variable-type">
+                    <option value="COLOR">Color</option>
+                    <option value="FLOAT">Float</option>
+                    <option value="INTEGER">Integer</option>
+                    <option value="STRING">String</option>
+                    <option value="BOOLEAN">Boolean</option>
+                </select>
+                <div id="value-type-selector">
+                    <label><input type="radio" name="value-type" value="direct" checked> Direct Value</label>
+                    <label><input type="radio" name="value-type" value="alias"> Alias</label>
+                </div>
+                <div id="variable-value-container">
+                    <input type="color" id="color-value" style="display: none;">
+                    <input type="number" id="number-value" style="display: none;">
+                    <input type="text" id="string-value" style="display: none;">
+                    <select id="boolean-value" style="display: none;">
+                        <option value="true">True</option>
+                        <option value="false">False</option>
+                    </select>
+                </div>
+                <select id="alias-select" style="display: none;">
+                    <option value="">Select a variable to alias</option>
+                </select>
+                <button type="submit">Create Variable</button>
+                <button type="button" id="cancel-create">Cancel</button>
+            `;
+
+            const collection = document.querySelector(`.collection[data-collection-id="${collectionId}"]`);
+            collection.insertBefore(form, collection.querySelector('.variables-container'));
+
+            setupCreateVariableFormListeners(collectionId);
+        }
+
+        function setupCreateVariableFormListeners(collectionId) {
+            const form = document.getElementById('create-variable-form');
+            const variableTypeSelect = document.getElementById('variable-type');
+            const valueTypeRadios = document.querySelectorAll('input[name="value-type"]');
+            const variableValueContainer = document.getElementById('variable-value-container');
+            const aliasSelect = document.getElementById('alias-select');
+
+            variableTypeSelect.addEventListener('change', function (e) {
+                const type = e.target.value;
+                const colorInput = document.getElementById('color-value');
+                const numberInput = document.getElementById('number-value');
+                const stringInput = document.getElementById('string-value');
+                const booleanInput = document.getElementById('boolean-value');
+
+                [colorInput, numberInput, stringInput, booleanInput].forEach(input => input.style.display = 'none');
+
+                switch (type) {
+                    case 'COLOR':
+                        colorInput.style.display = 'block';
+                        break;
+                    case 'FLOAT':
+                    case 'INTEGER':
+                        numberInput.style.display = 'block';
+                        numberInput.step = type === 'INTEGER' ? '1' : 'any';
+                        break;
+                    case 'STRING':
+                        stringInput.style.display = 'block';
+                        break;
+                    case 'BOOLEAN':
+                        booleanInput.style.display = 'block';
+                        break;
+                }
+            });
+
+            valueTypeRadios.forEach((radio) => {
+                radio.addEventListener('change', function () {
+                    const isAlias = this.value === 'alias';
+                    aliasSelect.style.display = isAlias ? 'block' : 'none';
+                    variableValueContainer.style.display = isAlias ? 'none' : 'block';
+                });
+            });
+
+            updateAliasSelect(allVariables);
+
+            form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const name = document.getElementById('variable-name').value;
+                const variableType = document.getElementById('variable-type').value;
+                const isAlias = document.querySelector('input[name="value-type"]:checked').value === 'alias';
+                let value;
+
+                if (isAlias) {
+                    const aliasId = document.getElementById('alias-select').value;
+                    value = { id: aliasId };
+                } else {
+                    switch (variableType) {
+                        case 'COLOR':
+                            value = hexToRgb(document.getElementById('color-value').value);
+                            break;
+                        case 'FLOAT':
+                        case 'INTEGER':
+                            value = parseFloat(document.getElementById('number-value').value);
+                            if (variableType === 'INTEGER') {
+                                value = Math.round(value);
+                            }
+                            break;
+                        case 'STRING':
+                            value = document.getElementById('string-value').value;
+                            break;
+                        case 'BOOLEAN':
+                            value = document.getElementById('boolean-value').value === 'true';
+                            break;
+                    }
+                }
+
+                parent.postMessage({
+                    pluginMessage: {
+                        type: 'create-variable',
+                        collectionId,
+                        name,
+                        variableType,
+                        value,
+                        isAlias
+                    }
+                }, '*');
+
+                form.remove();
+            });
+
+            document.getElementById('cancel-create').addEventListener('click', () => {
+                form.remove();
+            });
+        }
+
+        function updateAliasSelect(variables) {
+            const aliasSelect = document.getElementById('alias-select');
+            aliasSelect.innerHTML = '<option value="">Select a variable to alias</option>';
+            variables.forEach(v => {
+                const option = document.createElement('option');
+                option.value = v.id;
+                option.textContent = `${v.name} (${v.resolvedType})`;
+                aliasSelect.appendChild(option);
+            });
+        }
+
+        function addCreateVariableListeners() {
+            document.querySelectorAll('.add-variable-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const collectionId = e.target.dataset.collectionId;
+                    showCreateVariableForm(collectionId);
+                });
+            });
+        }
+
+        function pasteVariable(collectionId) {
+            console.log('Attempting to paste variable', clipboard, 'to collection', collectionId);
+            if (clipboard) {
+                parent.postMessage({
+                    pluginMessage: {
+                        type: 'paste-variable',
+                        collectionId: collectionId,
+                        variable: clipboard
+                    }
+                }, '*');
+
+                if (clipboard.action === 'cut') {
+                    clipboard = null;
+                    updateClipboardIndicator();
+                }
+            } else {
+                console.log('Clipboard is empty, cannot paste');
+            }
+        }
+
+        function duplicateVariable(variableId) {
+            parent.postMessage({
+                pluginMessage: {
+                    type: 'duplicate-variable',
+                    variableId: variableId
+                }
+            }, '*');
+        }
+
+        function deleteVariable(variableId) {
+            if (confirm('Are you sure you want to delete this variable?')) {
+                parent.postMessage({
+                    pluginMessage: {
+                        type: 'delete-variable',
+                        variableId: variableId
+                    }
+                }, '*');
+            }
+        }
+
+        function copyVariable(variableId) {
+            const variable = allVariables.find(v => v.id === variableId);
+            if (variable) {
+                clipboard = {
+                    name: variable.name,
+                    resolvedType: variable.resolvedType,
+                    action: 'copy',
+                    values: variable.values.map(v => ({ modeId: v.modeId, value: v.value }))
+                };
+                console.log('Variable copied to clipboard:', clipboard);
+                updateClipboardIndicator();
+                parent.postMessage({
+                    pluginMessage: {
+                        type: 'copy-variable',
+                        variableId: variableId
+                    }
+                }, '*');
+            }
+        }
+
+        function cutVariable(variableId) {
+            const variable = allVariables.find(v => v.id === variableId);
+            if (variable) {
+                clipboard = {
+                    name: variable.name,
+                    resolvedType: variable.resolvedType,
+                    action: 'cut',
+                    values: variable.values.map(v => ({ modeId: v.modeId, value: v.value }))
+                };
+                console.log('Variable cut to clipboard:', clipboard);
+                updateClipboardIndicator();
+                parent.postMessage({
+                    pluginMessage: {
+                        type: 'cut-variable',
+                        variableId: variableId
+                    }
+                }, '*');
+            }
+        }
+
+        function updateClipboardIndicator() {
+            const indicator = document.getElementById('clipboard-indicator');
+            const content = document.getElementById('clipboard-content');
+            if (clipboard) {
+                indicator.style.display = 'block';
+                content.textContent = `${clipboard.action}: ${clipboard.name}`;
+            } else {
+                indicator.style.display = 'none';
+            }
+        }
+
+        function pasteVariable(collectionId) {
+            console.log('Attempting to paste variable', clipboard, 'to collection', collectionId);
+            if (clipboard) {
+                console.log('Sending paste message:', {
+                    type: 'paste-variable',
+                    collectionId: collectionId,
+                    variable: clipboard
+                });
+                parent.postMessage({
+                    pluginMessage: {
+                        type: 'paste-variable',
+                        collectionId: collectionId,
+                        variable: clipboard
+                    }
+                }, '*');
+
+                if (clipboard.action === 'cut') {
+                    clipboard = null;
+                    updateClipboardIndicator();
+                }
+            } else {
+                console.log('Clipboard is empty, cannot paste');
+            }
+        }
+
+        document.addEventListener('keydown', function (e) {
+            if (e.target.closest('.variable')) {
+                const variableId = e.target.closest('.variable').dataset.variableId;
+                if (e.metaKey || e.ctrlKey) {  // Cmd sur Mac ou Ctrl sur Windows
+                    switch (e.key) {
+                        case 'c':
+                            e.preventDefault();
+                            copyVariable(variableId);
+                            break;
+                        case 'x':
+                            e.preventDefault();
+                            cutVariable(variableId);
+                            break;
+                        case 'v':
+                            e.preventDefault();
+                            const collectionId = e.target.closest('.collection').dataset.collectionId;
+                            pasteVariable(collectionId);
+                            break;
+                    }
+                }
+            }
+        });
+
+        document.getElementById('variable-filter').addEventListener('change', (e) => {
+            currentFilter = e.target.value;
+            displayVariables(allVariables);
+        });
+
+        document.getElementById('mode-select').addEventListener('change', (e) => {
+            currentMode = e.target.value;
+            displayVariables(allVariables);
+        });
+
+        document.getElementById('search-bar').addEventListener('input', (e) => {
+            searchTerm = e.target.value.toLowerCase();
+            displayVariables(allVariables);
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            parent.postMessage({ pluginMessage: { type: 'get-variables' } }, '*');
+        });
+    </script>
+</body>
+<div id="clipboard-indicator"
+    style="position: fixed; top: 10px; right: 10px; background: yellow; padding: 5px; display: none;">
+    Clipboard: <span id="clipboard-content"></span>
+</div>
+
+</html>
